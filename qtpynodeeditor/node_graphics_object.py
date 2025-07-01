@@ -289,6 +289,32 @@ class NodeGraphicsObject(QGraphicsObject):
         """
         pos = event.pos()
         geom = self._node.geometry
+
+        # Check for tooltip on port ellipses
+        tooltip_text = ""
+        for port_type in (PortType.input, PortType.output):
+            port = geom.check_hit_scene_point(port_type, event.scenePos(), self.sceneTransform())
+            if port:
+                port_type_str = "Input" if port_type == PortType.input else "Output"
+                connections_count = len(port.connections)
+                connection_status = f"Connected ({connections_count})" if connections_count > 0 else "Unconnected"
+
+                # Added tooltip for each node connection point - not all properties are currently displayed
+                tooltip_parts = [
+                    #f"{port_type_str} Port",
+                    f"Data Type: {port.data_type.name}" #,
+                    #f"Type ID: {port.data_type.id}",
+                    #f"Status: {connection_status}"
+                ]
+
+                #if port.caption_visible and port.caption:
+                #    tooltip_parts.insert(1, f"Caption: {port.caption}")
+
+                tooltip_text = "\n".join(tooltip_parts)
+                break
+
+        self.setToolTip(tooltip_text)
+
         if self._node.model.resizable() and geom.resize_rect.contains(
             QPoint(int(pos.x()), int(pos.y()))
         ):
