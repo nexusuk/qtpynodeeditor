@@ -162,6 +162,12 @@ class NodePainter:
         metrics = painter.fontMetrics()
 
         for port in state.ports:
+            # Check if this port should be visible (for DynamicNodeDataModel)
+            if hasattr(model, 'port_visible'):
+                port_visible = model.port_visible.get(port.port_type, {}).get(port.index, True)
+                if not port_visible:
+                    continue  # Skip drawing this port label entirely
+                    
             scene_pos = port.scene_position
             if not port.connections:
                 painter.setPen(node_style.font_color_faded)
@@ -199,6 +205,12 @@ class NodePainter:
         diameter = node_style.connection_point_diameter
         reduced_diameter = diameter * 0.6
         for port in state.ports:
+            # Check if this port should be visible (for DynamicNodeDataModel)
+            if hasattr(model, 'port_visible'):
+                port_visible = model.port_visible.get(port.port_type, {}).get(port.index, True)
+                if not port_visible:
+                    continue  # Skip drawing this port entirely
+                    
             scene_pos = port.scene_position
             can_connect = port.can_connect
             port_type = port.port_type
@@ -257,6 +269,12 @@ class NodePainter:
         for port in state.ports:
             if not port.connections:
                 continue
+                
+            # Check if this port should be visible (for DynamicNodeDataModel)
+            if hasattr(model, 'port_visible'):
+                port_visible = model.port_visible.get(port.port_type, {}).get(port.index, True)
+                if not port_visible:
+                    continue  # Skip drawing this port entirely
 
             scene_pos = port.scene_position
             if connection_style.use_data_defined_colors:

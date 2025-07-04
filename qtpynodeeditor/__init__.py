@@ -3,6 +3,7 @@ from .connection_geometry import ConnectionGeometry
 from .connection_graphics_object import ConnectionGraphicsObject
 from .connection_painter import ConnectionPainter
 from .data_model_registry import DataModelRegistry
+from .dynamic_node_data_model import DynamicNodeDataModel
 from .enums import ConnectionPolicy, NodeValidationState, PortType
 from .exceptions import (ConnectionCycleFailure, ConnectionDataTypeFailure,
                          ConnectionPointFailure, ConnectionPortNotEmptyFailure,
@@ -37,6 +38,7 @@ __all__ = [
     'ConnectionSelfFailure',
     'ConnectionStyle',
     'DataModelRegistry',
+    'DynamicNodeDataModel',
     'FlowScene',
     'FlowView',
     'FlowViewStyle',
