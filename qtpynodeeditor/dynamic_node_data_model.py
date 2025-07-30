@@ -7,6 +7,7 @@ made, the input becomes a normal connection and a new spare connection is
 created.
 """
 
+import copy
 from .node_data import NodeDataModel, NodeDataType
 from .port import Port, PortType
 
@@ -48,17 +49,7 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
     def __init_subclass__(cls, **kwargs):
         """Override to ensure dynamic port visibility"""
         super().__init_subclass__(**kwargs)
-
-        # Create a new port_visible attribute to control actual port rendering
-        if hasattr(cls, 'num_ports'):
-            max_inputs = cls.num_ports.get('input', 5)
-            max_outputs = cls.num_ports.get('output', 1)
-
-            # Create port_visible dictionary - start with all input ports hidden
-            cls.port_visible = {
-                'input': {i: False for i in range(max_inputs)},
-                'output': {i: True for i in range(max_outputs)}  # Output ports always visible
-            }
+        # Note: port_visible is now created per-instance in __init__ to avoid shared state
 
     def __init__(self, style=None, parent=None):
         # Initialize tracking variables
@@ -67,6 +58,25 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         self._connected_inputs = set()
         self._disconnected_inputs = set()  # Track previously connected ports that are now disconnected
         self._input_data = {}
+
+        # Create per-instance dictionaries to avoid shared state between instances
+        if hasattr(self, 'num_ports'):
+            max_inputs = self.num_ports.get('input', 5)
+            max_outputs = self.num_ports.get('output', 1)
+
+            # Create port_visible dictionary - start with all input ports hidden
+            self.port_visible = {
+                'input': {i: False for i in range(max_inputs)},
+                'output': {i: True for i in range(max_outputs)}  # Output ports always visible
+            }
+
+            # Copy port_caption and port_caption_visible to instance attributes to avoid sharing
+            # Make deep copies to ensure complete isolation between instances
+            if hasattr(self, 'port_caption'):
+                self.port_caption = copy.deepcopy(self.port_caption)
+
+            if hasattr(self, 'port_caption_visible'):
+                self.port_caption_visible = copy.deepcopy(self.port_caption_visible)
 
         super().__init__(style=style, parent=parent)
 
