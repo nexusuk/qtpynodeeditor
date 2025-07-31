@@ -105,6 +105,8 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         # Update captions and visibility for dynamic behavior
         self._update_port_display()
 
+
+
     def _update_port_display(self):
         """Update port captions and visibility based on current state"""
         max_inputs = self.num_ports[PortType.input]
@@ -154,6 +156,13 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         """Called when an input connection is created"""
         port_index = connection.get_port_index(PortType.input)
         max_inputs = self.num_ports[PortType.input]
+
+        # Validate that the port is visible - if not, reject the connection
+        if not self.can_connect_to_port(PortType.input, port_index):
+            # Connection to hidden port - schedule removal after connection process completes
+            from qtpy.QtCore import QTimer
+            QTimer.singleShot(1, lambda: self._remove_invalid_connection(connection))
+            return  # Don't process this connection further
 
         # If connecting to a disconnected port, move it back to connected
         if port_index in self._disconnected_inputs:
@@ -325,6 +334,69 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         """Check if a port is disconnected (previously connected but now unconnected)"""
         return port_index in self._disconnected_inputs
 
+    def can_connect_to_port(self, port_type, port_index):
+        """
+        Check if a connection can be made to the specified port.
+        
+        This method is used to prevent connections to hidden ports in DynamicNodeDataModel.
+        
+        Parameters
+        ----------
+        port_type : PortType
+            The type of port (input/output)
+        port_index : int
+            The index of the port
+            
+        Returns
+        -------
+        bool
+            True if connection is allowed, False otherwise
+        """
+        # For dynamic nodes, only allow connections to visible ports
+        if port_type == PortType.input and hasattr(self, 'port_visible'):
+            return self.port_visible.get(PortType.input, {}).get(port_index, True)
+        
+        # For output ports or non-dynamic behavior, allow connections
+        return True
+
+    def _remove_invalid_connection(self, connection):
+        """Remove a connection that was made to a hidden port"""
+        try:
+            # Try multiple approaches to remove the connection
+            
+            # Approach 1: Try to get scene from connection's graphics object
+            if hasattr(connection, 'graphics_object') and connection.graphics_object:
+                scene = connection.graphics_object.scene()
+                if scene and hasattr(scene, 'delete_connection'):
+                    scene.delete_connection(connection)
+                    return
+            
+            # Approach 2: Try to get scene through the nodes
+            if hasattr(connection, 'get_nodes'):
+                input_node, output_node = connection.get_nodes()
+                if input_node and hasattr(input_node, 'scene') and input_node.scene:
+                    scene = input_node.scene
+                    if hasattr(scene, 'delete_connection'):
+                        scene.delete_connection(connection)
+                        return
+                        
+            # Approach 3: Try to access the scene through the model's parent
+            if hasattr(self, 'parent') and self.parent():
+                node = self.parent()
+                if hasattr(node, 'scene') and node.scene:
+                    scene = node.scene
+                    if hasattr(scene, 'delete_connection'):
+                        scene.delete_connection(connection)
+                        return
+                        
+            # Approach 4: Try to disconnect the connection directly
+            if hasattr(connection, 'clear'):
+                connection.clear()
+            
+        except Exception:
+            # If we can't remove it gracefully, silently ignore
+            pass
+
     @property
     def active_input_count(self):
         """Number of currently active input ports"""
@@ -334,3 +406,54 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
     def spare_input_index(self):
         """Index of the current spare input port"""
         return self._spare_input_index
+
+    def save(self):
+        """
+        Save the dynamic node state including disconnected inputs.
+        
+        Returns
+        -------
+        dict
+            Dictionary containing the node state including disconnected inputs
+        """
+        # Get the base class state
+        state = super().save() if hasattr(super(), 'save') else {}
+        
+        # Add our dynamic node specific state
+        state.update({
+            'dynamic_node_state': {
+                'active_input_count': self._active_input_count,
+                'spare_input_index': self._spare_input_index,
+                'connected_inputs': list(self._connected_inputs),
+                'disconnected_inputs': list(self._disconnected_inputs),
+            }
+        })
+        
+        return state
+
+    def restore(self, state):
+        """
+        Restore the dynamic node state including disconnected inputs.
+        
+        Parameters
+        ----------
+        state : dict
+            Dictionary containing the node state
+        """
+        # Restore base class state first
+        if hasattr(super(), 'restore'):
+            super().restore(state)
+        
+        # Restore our dynamic node specific state
+        if 'dynamic_node_state' in state:
+            dynamic_state = state['dynamic_node_state']
+            
+            self._active_input_count = dynamic_state.get('active_input_count', 0)
+            self._spare_input_index = dynamic_state.get('spare_input_index', 0)
+            self._connected_inputs = set(dynamic_state.get('connected_inputs', []))
+            self._disconnected_inputs = set(dynamic_state.get('disconnected_inputs', []))
+            
+            # Update the port display to reflect restored state
+            self._update_port_display()
+            self.embedded_widget_size_updated.emit()
+            self.data_updated.emit(0)
