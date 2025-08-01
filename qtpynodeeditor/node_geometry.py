@@ -208,7 +208,13 @@ class NodeGeometry:
 
         self._entry_height = self._font_metrics.height()
 
-        max_num_of_entries = max((self.num_sinks, self.num_sources))
+        # For DynamicNodeDataModel, use actual visible port count
+        if hasattr(self._model, 'get_visual_port_count'):
+            visible_inputs = self._model.get_visual_port_count()
+        else:
+            visible_inputs = self.num_sinks
+        
+        max_num_of_entries = max((visible_inputs, self.num_sources))
         step = self._entry_height + self._spacing
         height = step * max_num_of_entries
 
@@ -236,7 +242,7 @@ class NodeGeometry:
     def port_scene_position(self, port_type: PortType, index: int,
                             t: QTransform = None) -> QPointF:
         """
-        Port scene position
+        Port scene position with support for visual remapping in DynamicNodeDataModel
 
         Parameters
         ----------
@@ -251,8 +257,30 @@ class NodeGeometry:
         if t is None:
             t = QTransform()
 
+        # For DynamicNodeDataModel input ports, use visual positioning
+        visual_index = index  # Default: use logical index
+        if (port_type == PortType.input and 
+            hasattr(self._model, 'logical_to_visual_index')):
+            try:
+                # Check if this is a static port
+                if hasattr(self._model, 'is_static_port') and self._model.is_static_port(index):
+                    # Static ports: use logical index directly (no remapping)
+                    visual_index = index
+                else:
+                    # Dynamic ports: use visual remapping
+                    visual_pos = self._model.logical_to_visual_index(index)
+                    if visual_pos is not None:
+                        visual_index = visual_pos
+                    else:
+                        # Hidden port - but still return a position to avoid connection failures
+                        # Use logical index as fallback
+                        visual_index = index
+            except Exception:
+                # Fallback to logical index if anything goes wrong
+                visual_index = index
+
         step = self._entry_height + self._spacing
-        total_height = float(self.caption_height) + step * index
+        total_height = float(self.caption_height) + step * visual_index
         # TODO_UPSTREAM: why?
         total_height += step / 2.0
 
@@ -270,7 +298,7 @@ class NodeGeometry:
     def check_hit_scene_point(self, port_type: PortType, scene_point: QPointF,
                               scene_transform: QTransform) -> typing.Optional[Port]:
         """
-        Check a scene point for a specific port type.
+        Check a scene point for a specific port type with visual mapping support.
 
         Parameters
         ----------
@@ -292,14 +320,28 @@ class NodeGeometry:
             return None
 
         nearby_port = None
-
         tolerance = 2.0 * self._style.connection_point_diameter
-        for idx, port in self._node.state[port_type].items():
-            pos = port.get_mapped_scene_position(scene_transform) - scene_point
-            distance = math.sqrt(QPointF.dotProduct(pos, pos))
-            if distance < tolerance:
-                nearby_port = port
-                break
+
+        # For DynamicNodeDataModel input ports, iterate in visual order
+        if (port_type == PortType.input and 
+            hasattr(self._model, 'get_visual_port_ordering')):
+            visual_order = self._model.get_visual_port_ordering()
+            for logical_idx in visual_order:
+                if logical_idx in self._node.state[port_type]:
+                    port = self._node.state[port_type][logical_idx]
+                    pos = port.get_mapped_scene_position(scene_transform) - scene_point
+                    distance = math.sqrt(QPointF.dotProduct(pos, pos))
+                    if distance < tolerance:
+                        nearby_port = port
+                        break
+        else:
+            # Standard behavior for output ports and other node types
+            for idx, port in self._node.state[port_type].items():
+                pos = port.get_mapped_scene_position(scene_transform) - scene_point
+                distance = math.sqrt(QPointF.dotProduct(pos, pos))
+                if distance < tolerance:
+                    nearby_port = port
+                    break
 
         return nearby_port
 
@@ -466,7 +508,7 @@ class NodeGeometry:
 
     def port_width(self, port_type: PortType) -> int:
         """
-        Port width
+        Port width with visual ordering support
 
         Parameters
         ----------
@@ -476,13 +518,22 @@ class NodeGeometry:
         -------
         value : int
         """
-        names = [port.display_text
-                 for port in self._node[port_type].values()]
-        if not names:
+        if (port_type == PortType.input and 
+            hasattr(self._model, 'get_visual_port_ordering')):
+            # Get ports in visual order for DynamicNodeDataModel
+            visual_order = self._model.get_visual_port_ordering()
+            ports = [self._node[port_type][logical_idx] 
+                    for logical_idx in visual_order 
+                    if logical_idx in self._node[port_type]]
+        else:
+            # Standard behavior for other node types and output ports
+            ports = list(self._node[port_type].values())
+        
+        if not ports:
             return 0
-
-        return max(self._font_metrics.horizontalAdvance(name)
-                   for name in names)
+        
+        names = [port.display_text for port in ports]
+        return max(self._font_metrics.horizontalAdvance(name) for name in names)
 
     @property
     def size(self):

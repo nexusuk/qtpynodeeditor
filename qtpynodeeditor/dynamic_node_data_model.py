@@ -45,6 +45,10 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
 
     # Default configuration - subclasses should override these
     num_ports = {'input': 5, 'output': 1}
+    
+    # Port type configuration for mixed static/dynamic ports
+    static_input_ports = None    # e.g., range(0, 3) for ports 0,1,2 as static
+    dynamic_input_ports = None   # e.g., range(3, 8) for ports 3,4,5,6,7 as dynamic
 
     def __init_subclass__(cls, **kwargs):
         """Override to ensure dynamic port visibility"""
@@ -52,31 +56,40 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         # Note: port_visible is now created per-instance in __init__ to avoid shared state
 
     def __init__(self, style=None, parent=None):
-        # Initialize tracking variables
+        # Auto-detect port ranges if not specified FIRST
+        if hasattr(self, 'num_ports'):
+            max_inputs = self.num_ports.get('input', 5)
+            max_outputs = self.num_ports.get('output', 1)
+            
+            if self.static_input_ports is None and self.dynamic_input_ports is None:
+                # Default behavior: all ports are dynamic
+                self.static_input_ports = range(0, 0)  # Empty range
+                self.dynamic_input_ports = range(0, max_inputs)
+            elif self.static_input_ports is None:
+                self.static_input_ports = range(0, 0)  # Empty range
+            elif self.dynamic_input_ports is None:
+                self.dynamic_input_ports = range(0, 0)  # Empty range
+
+        # Initialize tracking variables - set spare to first dynamic port
         self._active_input_count = 0
-        self._spare_input_index = 0
+        self._spare_input_index = min(self.dynamic_input_ports) if self.dynamic_input_ports else -1
         self._connected_inputs = set()
         self._disconnected_inputs = set()  # Track previously connected ports that are now disconnected
         self._input_data = {}
 
-        # Create per-instance dictionaries to avoid shared state between instances
-        if hasattr(self, 'num_ports'):
-            max_inputs = self.num_ports.get('input', 5)
-            max_outputs = self.num_ports.get('output', 1)
+        # Create port_visible dictionary - start with all input ports hidden
+        self.port_visible = {
+            'input': {i: False for i in range(max_inputs)},
+            'output': {i: True for i in range(max_outputs)}  # Output ports always visible
+        }
 
-            # Create port_visible dictionary - start with all input ports hidden
-            self.port_visible = {
-                'input': {i: False for i in range(max_inputs)},
-                'output': {i: True for i in range(max_outputs)}  # Output ports always visible
-            }
+        # Copy port_caption and port_caption_visible to instance attributes to avoid sharing
+        # Make deep copies to ensure complete isolation between instances
+        if hasattr(self, 'port_caption'):
+            self.port_caption = copy.deepcopy(self.port_caption)
 
-            # Copy port_caption and port_caption_visible to instance attributes to avoid sharing
-            # Make deep copies to ensure complete isolation between instances
-            if hasattr(self, 'port_caption'):
-                self.port_caption = copy.deepcopy(self.port_caption)
-
-            if hasattr(self, 'port_caption_visible'):
-                self.port_caption_visible = copy.deepcopy(self.port_caption_visible)
+        if hasattr(self, 'port_caption_visible'):
+            self.port_caption_visible = copy.deepcopy(self.port_caption_visible)
 
         super().__init__(style=style, parent=parent)
 
@@ -108,36 +121,37 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
 
 
     def _update_port_display(self):
-        """Update port captions and visibility based on current state"""
+        """Update port captions and visibility based on current state with visual ordering"""
         max_inputs = self.num_ports[PortType.input]
-
-        # Update captions and visibility
+        
+        # Hide all ports first
         for i in range(max_inputs):
-            if i == self._spare_input_index and self._spare_input_index >= 0:
-                # Spare port - special caption (check this first!)
-                self.port_caption[PortType.input][i] = "Connect here"
-                self.port_caption_visible[PortType.input][i] = True
-                self.port_visible[PortType.input][i] = True
-
-            elif i in self._connected_inputs:
-                # Connected port - use original caption or default
-                caption = self._original_port_caption.get(i, f"Input {i + 1}")
-                self.port_caption[PortType.input][i] = caption
-                self.port_caption_visible[PortType.input][i] = True
-                self.port_visible[PortType.input][i] = True
-
-            elif i in self._disconnected_inputs:
-                # Disconnected port - show as grayed out but visible
-                caption = self._original_port_caption.get(i, f"Input {i + 1}")
-                self.port_caption[PortType.input][i] = caption
-                self.port_caption_visible[PortType.input][i] = True
-                self.port_visible[PortType.input][i] = True
-
-            else:
-                # Hidden port - completely invisible (no ellipse, no caption)
-                self.port_caption[PortType.input][i] = ""
-                self.port_caption_visible[PortType.input][i] = False
-                self.port_visible[PortType.input][i] = False
+            self.port_visible[PortType.input][i] = False
+            self.port_caption[PortType.input][i] = ""
+            self.port_caption_visible[PortType.input][i] = False
+        
+        # Static ports: always visible in their logical positions
+        for logical_index in (self.static_input_ports or []):
+            caption = self._original_port_caption.get(logical_index, f"Input {logical_index + 1}")
+            self.port_caption[PortType.input][logical_index] = caption
+            self.port_caption_visible[PortType.input][logical_index] = True
+            self.port_visible[PortType.input][logical_index] = True
+        
+        # Dynamic ports: make visible based on visual ordering
+        visual_order = self.get_visual_port_ordering()
+        for logical_index in visual_order:
+            if self.is_dynamic_port(logical_index):
+                if logical_index == self._spare_input_index and self._spare_input_index >= 0:
+                    # Spare port - special caption
+                    self.port_caption[PortType.input][logical_index] = "Connect here"
+                    self.port_caption_visible[PortType.input][logical_index] = True
+                else:
+                    # Connected or disconnected dynamic port
+                    caption = self._original_port_caption.get(logical_index, f"Input {logical_index + 1}")
+                    self.port_caption[PortType.input][logical_index] = caption
+                    self.port_caption_visible[PortType.input][logical_index] = True
+                
+                self.port_visible[PortType.input][logical_index] = True
 
     def set_in_data(self, node_data, port: Port):
         """Handle input data and manage spare port logic"""
@@ -153,9 +167,20 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         self.process_input(node_data, port_index)
 
     def input_connection_created(self, connection):
-        """Called when an input connection is created"""
+        """Called when an input connection is created with support for static/dynamic ports"""
         port_index = connection.get_port_index(PortType.input)
         max_inputs = self.num_ports[PortType.input]
+
+        # Static ports: use standard connection handling
+        if self.is_static_port(port_index):
+            super().input_connection_created(connection)
+            return
+
+        # Dynamic ports: validate visibility and apply packing logic
+        if not self.is_dynamic_port(port_index):
+            # Port is neither static nor dynamic - shouldn't happen, but handle gracefully
+            super().input_connection_created(connection)
+            return
 
         # Validate that the port is visible - if not, reject the connection
         if not self.can_connect_to_port(PortType.input, port_index):
@@ -164,7 +189,7 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
             QTimer.singleShot(1, lambda: self._remove_invalid_connection(connection))
             return  # Don't process this connection further
 
-        # If connecting to a disconnected port, move it back to connected
+        # If connecting to a disconnected dynamic port, move it back to connected
         if port_index in self._disconnected_inputs:
             self._disconnected_inputs.discard(port_index)
             self._connected_inputs.add(port_index)
@@ -177,13 +202,13 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
             self._connected_inputs.add(port_index)
             self._active_input_count += 1
 
-            # Move spare to next available slot that's not connected or disconnected
-            for i in range(max_inputs):
+            # Move spare to next available dynamic slot that's not connected or disconnected
+            for i in self.dynamic_input_ports:
                 if i not in self._connected_inputs and i not in self._disconnected_inputs:
                     self._spare_input_index = i
                     break
             else:
-                # All ports are now connected or disconnected, no more spare port
+                # All dynamic ports are now connected or disconnected, no more spare port
                 self._spare_input_index = -1  # No spare port available
 
             # Update display and signal changes
@@ -195,10 +220,21 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
         super().input_connection_created(connection)
 
     def input_connection_deleted(self, connection):
-        """Called when an input connection is deleted"""
+        """Called when an input connection is deleted with support for static/dynamic ports"""
         port_index = connection.get_port_index(PortType.input)
 
-        # If we're disconnecting from a previously active port
+        # Static ports: use standard connection handling
+        if self.is_static_port(port_index):
+            super().input_connection_deleted(connection)
+            return
+
+        # Dynamic ports: apply packing logic
+        if not self.is_dynamic_port(port_index):
+            # Port is neither static nor dynamic - shouldn't happen, but handle gracefully
+            super().input_connection_deleted(connection)
+            return
+
+        # If we're disconnecting from a previously active dynamic port
         if port_index in self._connected_inputs:
             self._connected_inputs.discard(port_index)
             # Add to disconnected inputs so it remains visible as grayed out
@@ -207,14 +243,13 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
             # If this was the last active port, move spare back
             if port_index == self._active_input_count - 1:
                 self._active_input_count -= 1
-                # Find the next available slot for spare (not connected and not disconnected)
-                max_inputs = self.num_ports[PortType.input]
-                for i in range(max_inputs):
+                # Find the next available dynamic slot for spare (not connected and not disconnected)
+                for i in self.dynamic_input_ports:
                     if i not in self._connected_inputs and i not in self._disconnected_inputs:
                         self._spare_input_index = i
                         break
                 else:
-                    # No available slots, disable spare
+                    # No available dynamic slots, disable spare
                     self._spare_input_index = -1
 
             # Always update display when a connection is deleted
@@ -227,15 +262,14 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
             # Add to disconnected inputs so it remains visible as grayed out
             self._disconnected_inputs.add(port_index)
 
-            # Move spare to next available slot (spare shouldn't be same as disconnected slot)
-            # Find the next available slot that's not connected or disconnected
-            max_inputs = self.num_ports[PortType.input]
-            for i in range(max_inputs):
+            # Move spare to next available dynamic slot (spare shouldn't be same as disconnected slot)
+            # Find the next available dynamic slot that's not connected or disconnected
+            for i in self.dynamic_input_ports:
                 if i not in self._connected_inputs and i not in self._disconnected_inputs:
                     self._spare_input_index = i
                     break
             else:
-                # No available slots, disable spare
+                # No available dynamic slots, disable spare
                 self._spare_input_index = -1
 
             # Always update display when a connection is deleted
@@ -406,6 +440,69 @@ class DynamicNodeDataModel(NodeDataModel, verify=False):
     def spare_input_index(self):
         """Index of the current spare input port"""
         return self._spare_input_index
+
+    def is_static_port(self, port_index):
+        """Check if a port is static (non-dynamic)"""
+        return (self.static_input_ports and 
+                port_index in self.static_input_ports)
+
+    def is_dynamic_port(self, port_index):
+        """Check if a port is dynamic"""
+        return (self.dynamic_input_ports and 
+                port_index in self.dynamic_input_ports)
+
+    def get_visual_port_ordering(self):
+        """
+        Get the visual ordering of input ports for display.
+        Returns list of logical indices in visual order (top to bottom).
+        Static ports appear first, then packed dynamic ports.
+        """
+        visual_order = []
+        
+        # 1. Static ports first (always in logical order)
+        if self.static_input_ports:
+            visual_order.extend(sorted(self.static_input_ports))
+        
+        # 2. Dynamic ports in packed order
+        if self.dynamic_input_ports:
+            # Only consider dynamic port indices for packing logic
+            dynamic_connected = [i for i in self._connected_inputs 
+                               if i in self.dynamic_input_ports]
+            dynamic_disconnected = [i for i in self._disconnected_inputs 
+                                  if i in self.dynamic_input_ports]
+            
+            # Connected dynamic ports (sorted for consistency)
+            visual_order.extend(sorted(dynamic_connected))
+            
+            # Spare dynamic port
+            if (self._spare_input_index >= 0 and 
+                self._spare_input_index in self.dynamic_input_ports):
+                visual_order.append(self._spare_input_index)
+            
+            # Disconnected dynamic ports (sorted for consistency)
+            visual_order.extend(sorted(dynamic_disconnected))
+        
+        return visual_order
+
+    def logical_to_visual_index(self, logical_index):
+        """Convert logical port index to visual position (0=top, 1=next, etc.)"""
+        visual_order = self.get_visual_port_ordering()
+        try:
+            return visual_order.index(logical_index)
+        except ValueError:
+            return None  # Hidden/invalid port
+
+    def visual_to_logical_index(self, visual_index):
+        """Convert visual position to logical port index"""
+        visual_order = self.get_visual_port_ordering()
+        if 0 <= visual_index < len(visual_order):
+            return visual_order[visual_index]
+        return None
+
+    def get_visual_port_count(self):
+        """Get count of visible ports"""
+        return len(self.get_visual_port_ordering())
+
 
     def save(self):
         """
